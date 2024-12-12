@@ -63,54 +63,64 @@ class Pipeline implements Serializable {
             script.error "Failed to push to Docker Hub: ${e.message}"
         }
     }
-    def deployToKindCluster() {
-        script.echo "Deploying to Kind cluster..."
-        script.timeout(time: 10, unit: 'MINUTES') {
-            try {
-                script.withCredentials([script.file(credentialsId: config.KUBECONFIG_FILE, variable: 'KUBECONFIG_FILE')]) {
-                    // Get deployment template
-                    def deploymentTemplate = script.libraryResource 'kubernetes/deployment.yaml'
-                    
-                    // Replace variables in template
-                    def deploymentYaml = deploymentTemplate.replace('${image}', "${config.DOCKER_IMAGE_NAME}:${script.env.BUILD_NUMBER}")
-                    
-                    // Write deployment file
-                    script.writeFile file: 'deployment.yaml', text: deploymentYaml
-                    
-                    script.sh """
-                        # Set KUBECONFIG
-                        export KUBECONFIG=\${KUBECONFIG_FILE}
+def deployToKindCluster() {
+    script.echo "Deploying to Kind cluster..."
+    script.timeout(time: 10, unit: 'MINUTES') {
+        try {
+            script.withCredentials([script.file(credentialsId: config.KUBECONFIG_FILE, variable: 'KUBECONFIG_FILE')]) {
+                // Get deployment template
+                def deploymentTemplate = script.libraryResource 'kubernetes/deployment.yaml'
+                
+                // Replace variables in template
+                def imageTag = "${config.DOCKER_IMAGE_NAME}:${script.env.BUILD_NUMBER}"
+                def deploymentYaml = deploymentTemplate.replace('${image}', imageTag)
+                
+                // Debug output
+                script.echo "Generated deployment YAML:"
+                script.echo deploymentYaml
+                
+                // Write deployment file
+                script.writeFile file: 'deployment.yaml', text: deploymentYaml
+                
+                script.sh """
+                    # Set KUBECONFIG
+                    export KUBECONFIG=\${KUBECONFIG_FILE}
 
-                        # Verify cluster and context
-                        echo "Available clusters:"
-                        kind get clusters
-                        
-                        echo "Current context:"
-                        kubectl config current-context
+                    # Verify cluster and context
+                    echo "Available clusters:"
+                    kind get clusters
+                    
+                    echo "Current context:"
+                    kubectl config current-context
 
-                        # Load image to Kind cluster
-                        echo "Loading image to Kind cluster..."
-                        kind load docker-image ${config.DOCKER_IMAGE_NAME}:${script.env.BUILD_NUMBER} --name ${config.KIND_CLUSTER_NAME}
+                    # Load image to Kind cluster
+                    echo "Loading image to Kind cluster..."
+                    kind load docker-image ${imageTag} --name ${config.KIND_CLUSTER_NAME}
 
-                        # Apply deployment
-                        kubectl apply -f deployment.yaml
-                        
-                        # Wait for deployment to be ready
-                        kubectl rollout status deployment/lab-app-deployment --timeout=300s
-                        
-                        # Get deployment status
-                        echo "Deployment status:"
-                        kubectl get deployments -o wide
-                        kubectl get pods -o wide
-                        kubectl get services
-                        
-                        # Get NodePort URL
-                        echo "Application should be accessible at: http://localhost:30080"
-                    """
-                }
-            } catch (Exception e) {
-                script.error "Deployment to Kind cluster failed: ${e.message}"
+                    # Validate YAML before applying
+                    echo "Validating deployment YAML..."
+                    kubectl apply -f deployment.yaml --dry-run=client
+
+                    # Apply deployment
+                    echo "Applying deployment..."
+                    kubectl apply -f deployment.yaml
+                    
+                    # Wait for deployment to be ready
+                    echo "Waiting for deployment rollout..."
+                    kubectl rollout status deployment/lab-app-deployment --timeout=300s
+                    
+                    # Get deployment status
+                    echo "Deployment status:"
+                    kubectl get deployments -o wide
+                    kubectl get pods -o wide
+                    kubectl get services
+                    
+                    # Get NodePort URL
+                    echo "Application should be accessible at: http://localhost:30080"
+                """
             }
+        } catch (Exception e) {
+            script.error "Deployment to Kind cluster failed: ${e.message}"
         }
     }
     def verifyKindDeployment() {
